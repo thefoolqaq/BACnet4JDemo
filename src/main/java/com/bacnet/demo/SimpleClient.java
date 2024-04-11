@@ -3,9 +3,11 @@ package com.bacnet.demo;
 import com.bacnet.util.BacnetUtils;
 import com.serotonin.bacnet4j.LocalDevice;
 import com.serotonin.bacnet4j.RemoteDevice;
+import com.serotonin.bacnet4j.ServiceFuture;
 import com.serotonin.bacnet4j.exception.BACnetException;
 import com.serotonin.bacnet4j.exception.PropertyValueException;
 import com.serotonin.bacnet4j.npdu.ip.IpNetwork;
+import com.serotonin.bacnet4j.service.acknowledgement.AcknowledgementService;
 import com.serotonin.bacnet4j.service.acknowledgement.ReadPropertyMultipleAck;
 import com.serotonin.bacnet4j.service.confirmed.ReadPropertyMultipleRequest;
 import com.serotonin.bacnet4j.transport.DefaultTransport;
@@ -16,11 +18,14 @@ import com.serotonin.bacnet4j.type.primitive.Boolean;
 import com.serotonin.bacnet4j.type.primitive.ObjectIdentifier;
 import com.serotonin.bacnet4j.type.primitive.Real;
 import com.serotonin.bacnet4j.util.PropertyValues;
+import com.serotonin.bacnet4j.util.RemoteDeviceFinder;
 import com.serotonin.bacnet4j.util.RequestUtils;
+import com.serotonin.bacnet4j.util.sero.ThreadUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 
 /**
@@ -45,8 +50,9 @@ public class SimpleClient {
     }
 
     //搜索所有远程设备
-    public List<RemoteDevice> funAllRemoteDevice() {
+    public List<RemoteDevice> funAllRemoteDevice() throws BACnetException {
         localDevice.startRemoteDeviceDiscovery();
+        localDevice.getRemoteDeviceBlocking(3);
         List<RemoteDevice> remoteDevices = localDevice.getRemoteDevices();
         System.out.println(remoteDevices.size());
         return remoteDevices;
@@ -84,16 +90,12 @@ public class SimpleClient {
     //读取设备数据
     public void read(RemoteDevice remoteDevice, ObjectType type) throws BACnetException, PropertyValueException {
         if (type == null) {
-            System.out.println("<=============================>");
             Set<ObjectType> types = getAllObject(localDevice, remoteDevice);
             for (ObjectType o : types) {
                 getObjcetType(localDevice, remoteDevice, o);
             }
-            System.out.println("<=============================>");
         } else {
-            System.out.println("<=============================>");
             getObjcetType(localDevice, remoteDevice, type);
-            System.out.println("<=============================>");
         }
     }
 
@@ -116,20 +118,28 @@ public class SimpleClient {
         localDevice = new LocalDevice(10000 + (int) (Math.random() * 10000), new DefaultTransport(network));
         //初始化本地设备
         localDevice.initialize();
+
         // 获取远程设备
-        RemoteDevice remoteDevice = client.funRemoteDevice(11111);
+      //  RemoteDevice remoteDevice = client.funRemoteDevice(3);
 
         //获取所有远程设备
-         // List<RemoteDevice> remoteDevices = client.funAllRemoteDevice();
-//        List<RemoteDevice> r = new ArrayList<>();
-//        r.add(remoteDevices);
+          List<RemoteDevice> remoteDevices = client.funAllRemoteDevice();
+        List<RemoteDevice> r = new ArrayList<>();
+        for (RemoteDevice  remoteDevice: remoteDevices){
+            r.add(remoteDevice);
+        }
 
 
         /*读取对象的名称以及实时值*/
-//           while(true) {
-//              client.read(remoteDevice, ObjectType.analogOutput);
-//               Thread.sleep(5000);
-//           }
+           while(true) {
+               for (RemoteDevice remoteDevice:r){
+                   System.out.println("==================");
+//                   client.read(remoteDevice, ObjectType.analogInput);
+                   client.readMultiple(localDevice, remoteDevice);
+                   System.out.println("==================");
+              }
+               Thread.sleep(60000);
+           }
 
 
 
@@ -142,7 +152,7 @@ public class SimpleClient {
 
 
         // 读取设备所有对象属性
-         client.readMultiple(localDevice, remoteDevice);
+        // client.readMultiple(localDevice, remoteDevice);
 
 
         // 动态创建对象失败，BACnet设备可能被配置为只接受预先定义的对象创建，而不支持动态创建。删除同理
@@ -158,26 +168,42 @@ public class SimpleClient {
 
 
     // 读取对象的多个属性
-    public void readMultiple(LocalDevice localDevice, RemoteDevice remoteDevice) throws BACnetException {
+    public synchronized void readMultiple(LocalDevice localDevice, RemoteDevice remoteDevice) throws BACnetException, InterruptedException {
         List<ObjectIdentifier> objectList = RequestUtils.getObjectList(localDevice, remoteDevice).getValues();
-        for (int i = 0; i < objectList.size(); i++) {
+        List<ObjectIdentifier> list = objectList.stream()
+                .filter(e->
+//                        e.getObjectType().equals(ObjectType.analogValue)||
+//                        e.getObjectType().equals(ObjectType.analogInput)||
+//                        e.getObjectType().equals(ObjectType.binaryInput)||
+//                        e.getObjectType().equals(ObjectType.binaryOutput)||
+                        e.getObjectType().equals(ObjectType.binaryValue))
+//                        e.getObjectType().equals(ObjectType.multiStateInput)||
+//                        e.getObjectType().equals(ObjectType.multiStateOutput)||
+                     //   e.getObjectType().equals(ObjectType.multiStateValue))
+                .collect(Collectors.toList());
+        for (int i = list.size(); i >0; i--) {
             List<PropertyReference> refs = new ArrayList<>();
+//            refs.add(new PropertyReference(PropertyIdentifier.objectIdentifier));
+//            refs.add(new PropertyReference(PropertyIdentifier.objectName));
+//            refs.add(new PropertyReference(PropertyIdentifier.objectType));
+//            refs.add(new PropertyReference(PropertyIdentifier.presentValue));
+//            refs.add(new PropertyReference(PropertyIdentifier.description));
             refs.add(new PropertyReference(PropertyIdentifier.all));
             List<ReadAccessSpecification> specs = new ArrayList<>();
-            specs.add(new ReadAccessSpecification(objectList.get(i), new SequenceOf<>(refs)));
+            specs.add(new ReadAccessSpecification(list.get(i-1), new SequenceOf<>(refs)));
             ReadPropertyMultipleRequest request = new ReadPropertyMultipleRequest(new SequenceOf<>(specs));
             ReadPropertyMultipleAck ack = localDevice.send(remoteDevice, request).get();
             SequenceOf<ReadAccessResult> listOfReadAccessResults = ack.getListOfReadAccessResults();
-            ReadAccessResult base1 = listOfReadAccessResults.getBase1(1);
-            System.out.println("设备属性：" + base1.getObjectIdentifier());
-            SequenceOf<ReadAccessResult.Result> listOfResults = base1.getListOfResults();
+            ReadAccessResult base = listOfReadAccessResults.getBase1(1);
+            System.out.println("设备属性：" + base.getObjectIdentifier());
+            SequenceOf<ReadAccessResult.Result> listOfResults = base.getListOfResults();
             List<ReadAccessResult.Result> results = listOfResults.getValues();
             for (ReadAccessResult.Result r : results) {
                 System.out.println(r.getPropertyIdentifier() + ":" + r.getReadResult());
             }
             System.out.println("----------------------------------------------");
-        }
 
+        }
     }
 
 
